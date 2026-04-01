@@ -7,8 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -73,9 +71,8 @@ func Authorize(configPath string) error {
 		redirectURI,
 	)
 
-	log.Printf("Opening browser for Strava authorization...")
-	log.Printf("If the browser does not open, visit this URL manually:\n%s", authURL)
-	openBrowser(authURL)
+	log.Printf("Please visit the following URL to authorize the application:\n\n%s\n", authURL)
+	log.Println("Waiting for authorization callback...")
 
 	// Wait for callback or timeout
 	var code string
@@ -135,15 +132,4 @@ func Authorize(configPath string) error {
 	return nil
 }
 
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	cmd.Start()
-}
+
