@@ -1,21 +1,29 @@
-# OnelapSyncStrava
+# Onelap-Sync-Strava
 
-自动将顽鹿的骑行数据同步到 Strava。
+让顽鹿运动重新同步 Strava 的小工具。
 
-## 项目背景
+## 为什么做这个项目？
 
-顽鹿运动（Onelap）此前支持将运动数据自动同步至 Strava，但该功能于 2026 年 3 月 19 日关闭。本项目旨在恢复这一功能，通过 API 自动将顽鹿的骑行数据同步到 Strava。
+很多骑友习惯把运动记录都存在 Strava 上。但从 2026 年 3 月 19 日起，顽鹿官方关停了直连 Strava 的通道。本项目就是为了重新打通这个环节：通过 API 自动把你的顽鹿骑行记录搬到 Strava。
 
 
-## 功能
+## 它能帮你做什么
 
-- **顽鹿登录认证**: 使用 MD5 签名安全登录
-- **活动筛选**: 自动提取并过滤尚未同步的当天骑行记录
-- **FIT 文件处理**: 获取最完整的 FIT 格式的活动数据并上传
-- **Strava OAuth**: 自动验证并刷新 Strava 访问令牌，无需手动维护
-- **多种运行模式**: 提供 `sync`, `auth`, `check` 和 `status` 等多种子命令，方便配置和调试
-- **本地状态管理**: 同步记录及访问令牌持久化保存在本地 (`state.json` 和 `config.json`)，避免重复上传
-- **Agent 专属向导**: 内置 `sync_wizard` Skill，支持 AI 助手一步步引导完成环境和配置搭建
+- **安全登录**：基于原厂 MD5 签名流程，保障账号安全。
+- **聪明地同步**：自动找出还没上传过的记录，不漏传，也不重传。
+- **原始 FIT 数据**：直接抓取最完整的 FIT 文件并上传，骑行细节一丁点都不丢失。
+- **省心的 Strava 授权**：支持 Token 自动刷新。配好以后，它就只是个安静的后台同步工具。
+- **灵活的操作方式**：不论是一键全自动同步，还是手动的环境检测，都能找对应的子命令。
+
+## 快速上手
+
+只需三分钟，通过以下五步即可找回自动同步的快乐：
+
+1. **先去 Strava 串个门**。在 [API 设置](https://www.strava.com/settings/api) 里创建一个应用，回调域名（Callback Domain）填 `localhost`，记下生成的 `Client ID` 和 `Secret`。
+2. **准备配置文件**。把项目根目录下的 `config.sample.json` 复制一份，改名为 `config.json`。
+3. **填入账号信息**。打开 `config.json`，填入你的顽鹿账号密码，以及刚才拿到的那两串 Strava 凭据。
+4. **过一遍授权**。终端运行 `./OnelapSyncStrava auth`。浏览器会自动跳出授权页面，你只需要点一下“确认授权”即可。
+5. **起飞**。运行 `./OnelapSyncStrava` 开始同步。以后每次骑完跑一下它就行，甚至可以丢进后台定时任务彻底解放双手。
 
 ## 前置要求
 
@@ -26,26 +34,25 @@
 
 ## 下载与安装
 
-### 使用预编译的二进制（推荐）
+### 懒人包 (推荐)
 
-可以通过 Github Actions 下载自动构建好的最新二进制文件。支持 Windows, macOS 和 Linux 平台。
-[前往下载 Releases](https://github.com/kermit-r-wood/OnelapSyncStrava/releases) 或者在 Actions 详情页面下载 Artifacts。
+直接去 [GitHub Releases](https://github.com/kermit-r-wood/OnelapSyncStrava/releases) 下载官方构建好的二进制文件即可，支持 Windows, macOS 和 Linux。
 
 ### 源码编译
 
-需要 Go 1.21+ 环境:
+如果你的机器上有 Go 1.21+ 环境，也可以自己动手：
 
 ```bash
 git clone https://github.com/kermit-r-wood/OnelapSyncStrava.git
 cd OnelapSyncStrava
 make build
-# 或者直接使用 go 命令编译
+# 或者直接编译
 go build -o OnelapSyncStrava main.go
 ```
 
 ## 配置指南
 
-将项目根目录下的 `config.sample.json` 复制并重命名为 `config.json`，按需填入你的凭证：
+把项目里的 `config.sample.json` 复制一份并改名为 `config.json`，把你的凭证填进去：
 
 ```json
 {
@@ -63,42 +70,35 @@ go build -o OnelapSyncStrava main.go
 }
 ```
 
-> **为什么填写了 client_id 和 client_secret 后还需要授权？**
-> 1. `client_id` 和 `client_secret` 是你的 **Strava API 应用凭证**，用于向 Strava 标识本程序。
-> 2. **授权流程**（执行 `auth` 命令）是由于 Strava 的安全机制，需要你作为 **用户** 亲自同意授权给该应用上传数据的权限。
-> 3. 授权成功后，程序会自动获取 `access_token` 和 `refresh_token` 并保存到 `config.json` 中，之后即可实现全自动同步，无需再次手动授权。
+> **常见疑问：我都填了 ID 和 Secret，为什么还要跑 `auth` 命令？**
+> 简单来说，ID 和 Secret 是这个“软件”的身份证。而 `auth` 流程是你这位“用户”在亲自点头：我同意把数据授权给它。这步只需要走一次，之后程序拿到 `refresh_token` 就能自动“续命”了。
 
 
 ## 使用教程
 
-基础命令格式：
+基础命令如下（如果不加参数，程序默认会进 `sync` 同步模式）：
 ```bash
 ./OnelapSyncStrava [command]
 ```
-（如果不加 `[command]`，默认执行 `sync` 任务）
 
-### 1. 检查配置 (`check`)
+### 1. 测一下连通性 (`check`)
 
-配置完毕后，首先运行 `check` 命令检查连通性是否正常：
-
+配好之后先别急，跑个 `check` 看看顽鹿和 Strava 都能不能连上：
 ```bash
 ./OnelapSyncStrava check
 ```
-程序将分别测试 顽鹿 以及 Strava API 的连接状态及凭据有效性。
+这会帮你检查账户凭据有没有填错，连不连得上 API。
 
-### 2. 授权 Strava (`auth`)
+### 2. 握个手授权 (`auth`)
 
-使用此命令启动内置验证服务进行 Strava 授权（由于访问限制，初次运行必须执行此步）：
-
+初次运行必须要走这一步。执行命令后，浏览器会自动弹出来：
 ```bash
 ./OnelapSyncStrava auth
 ```
+**关键点**：授权页面记得勾选 **「Upload your activities and posts to Strava」**，否则数据传不上去。
+授权搞定后，Token 会自动存进 `config.json`。
 
-程序会自动打开浏览器并前往 Strava 进行授权。
-**重要**：授权请求中必须勾选 **「Upload your activities and posts to Strava」**，否则即使成功拉取也不能上传数据。
-授权完成后，Token 会自动写入至 `config.json` 中保存，以后无需再重复操作。
-
-*（提示：如果是运行在无头远程服务器等无法浏览器重定向的环境，你可以将终端输出的授权链接复制到本地浏览器中访问，授权同意之后再把最终报错跳转地址附带的 `?code=xxx` 重新手动回调请求给程序即可生效，或者请求智能助手帮忙代理处理。）*
+*注：如果你在没桌面的远程服务器上跑，可以手动把终端里的链接贴到你本地浏览器访问，完成后把跳转 URL 里的 `code` 贴回给程序就行。*
 
 ### 3. 数据同步 (`sync`)
 
@@ -125,11 +125,11 @@ go build -o OnelapSyncStrava main.go
 ```
 展示当前的账户设定、Strava验证状态，以及历史成功同步的骑行活动条目数。
 
-## 定时执行（可选）
+## 自动后台运行
 
-建议通过计划任务实现全自动后台同步。
-- **Windows**: 使用 **任务计划程序** 定时执行 `OnelapSyncStrava.exe`。
-- **Linux/macOS**: 配置 `crontab` 定时任务（例如每日晚间定期执行一次）。
+建议配个定时任务实现“全自动骑完即同步”：
+- **Windows**: 丢进 **任务计划程序** 每天跑一两次（或者配合骑行时间）。
+- **Linux/macOS**: 配置 `crontab` 定时任务。
 
 ## 项目结构
 
