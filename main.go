@@ -134,7 +134,7 @@ func runSync() {
 	syncedCount := 0
 	for _, act := range activities {
 		idStr := act.ExternalID
-		
+
 		if config.IsSynced(idStr) {
 			log.Printf("Activity %s already synced, skipping.", idStr)
 			continue
@@ -142,9 +142,17 @@ func runSync() {
 
 		log.Printf("Processing activity: %s (%s)", idStr, act.StartTime)
 
+		// Fetch the pre-signed download URL via the analysis endpoint.
+		log.Printf("Fetching download URL...")
+		durl, err := onelapClient.GetDownloadURL(idStr)
+		if err != nil {
+			log.Printf("Error getting download URL for activity %s: %v", idStr, err)
+			continue
+		}
+
 		fitPath := filepath.Join(tmpDir, fmt.Sprintf("%s.fit", idStr))
 		log.Printf("Downloading FIT file...")
-		if err := onelapClient.DownloadFIT(act.DURL, fitPath); err != nil {
+		if err := onelapClient.DownloadFIT(durl, fitPath); err != nil {
 			log.Printf("Error downloading FIT for activity %s: %v", idStr, err)
 			continue
 		}
