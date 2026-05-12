@@ -15,7 +15,7 @@ import (
 const (
 	OnelapSecret      = "fe9f8382418fcdeb136461cac6acae7b"
 	LoginBaseURL      = "https://www.onelap.cn/api"
-	RideRecordBaseURL = "https://u.onelap.cn/api/otm/ride_record"
+	RideRecordBaseURL = "https://otm.onelap.cn/api/otm/ride_record"
 )
 
 type Client struct {
