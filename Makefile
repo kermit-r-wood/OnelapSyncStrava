@@ -1,4 +1,7 @@
-BINARY_NAME=OnelapSyncStrava.exe
+BINARY_NAME=OnelapSyncStrava
+ifeq ($(OS),Windows_NT)
+	BINARY_NAME := $(BINARY_NAME).exe
+endif
 
 .PHONY: build
 build:

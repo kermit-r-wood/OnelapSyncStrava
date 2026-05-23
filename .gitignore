@@ -5,6 +5,7 @@
 *.so
 *.dylib
 MageneSync
+OnelapSyncStrava
 
 # Configuration and State
 config.json
