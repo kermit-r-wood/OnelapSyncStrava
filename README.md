@@ -116,6 +116,23 @@ go build -o OnelapSyncStrava main.go
 5. 下载对应的 FIT 文件并将其上传到 Strava
 6. 更新本地持久化记录 `state.json`
 
+#### 同步历史活动 (`--since`)
+
+默认只同步当天（含昨天）的活动。如果想补传过去某段时间内的活动，加上 `--since` 参数即可：
+
+```bash
+# 从指定日期起的所有活动（含 5 月 1 日当天）
+./OnelapSyncStrava sync --since=2026-05-01
+
+# 最近 N 天 / 周 / 月 / 年（按本地时区对齐到当天 00:00）
+./OnelapSyncStrava sync --since=7d   # 最近 7 天
+./OnelapSyncStrava sync --since=2w   # 最近 2 周
+./OnelapSyncStrava sync --since=6m   # 最近半年
+./OnelapSyncStrava sync --since=1y   # 最近 1 年
+```
+
+依然会按 `state.json` 过滤已同步的记录，所以反复跑不会重复上传。
+
 ### 4. 查看状态 (`status`)
 
 你可以随时通过此命令快速检查当前环境配置文件和历史同步情况：
