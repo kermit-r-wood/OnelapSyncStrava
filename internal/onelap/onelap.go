@@ -196,6 +196,53 @@ func (c *Client) GetActivities() ([]Activity, error) {
 	return c.GetRecentActivities(maxPages)
 }
 
+// GetActivitiesSince fetches all ride records with start_riding_time on or after `since`.
+// Records are returned newest-first, so pagination short-circuits once an older record appears.
+func (c *Client) GetActivitiesSince(since time.Time) ([]Activity, error) {
+	const pageSize = 20
+	var matched []Activity
+
+	for page := 1; ; page++ {
+		reqBody := rideListRequest{Page: page, Limit: pageSize}
+		var result rideListResponse
+
+		resp, err := c.authRequest().
+			SetHeader("Content-Type", "application/json").
+			SetBody(reqBody).
+			SetResult(&result).
+			Post(RideRecordBaseURL + "/list")
+
+		if err != nil {
+			return nil, fmt.Errorf("get activity list (page %d) failed: %w", page, err)
+		}
+		if resp.StatusCode() != http.StatusOK {
+			return nil, fmt.Errorf("get activity list failed with status: %s, body: %s", resp.Status(), resp.String())
+		}
+		if result.Code != 200 {
+			return nil, fmt.Errorf("get activity list API error: code=%d, message=%s", result.Code, result.Message)
+		}
+
+		stop := false
+		for _, act := range result.Data.List {
+			t, err := time.ParseInLocation("2006-01-02 15:04:05", act.StartTime, time.Local)
+			if err != nil {
+				continue
+			}
+			if t.Before(since) {
+				stop = true
+				break
+			}
+			matched = append(matched, act)
+		}
+
+		if stop || !result.Data.Pagination.HasMore {
+			break
+		}
+	}
+
+	return matched, nil
+}
+
 func (c *Client) GetTodayActivities() ([]Activity, error) {
 	// Activities are returned newest-first, so today's records are on page 1.
 	// Fetch up to 2 pages (40 activities) to handle timezone edge cases.
