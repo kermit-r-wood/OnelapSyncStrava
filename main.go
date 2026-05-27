@@ -45,7 +45,11 @@ func main() {
 	case "status":
 		runStatus()
 	case "sync":
-		runSync(parseSyncFlags(os.Args[2:]))
+		var syncArgs []string
+		if len(os.Args) > 2 {
+			syncArgs = os.Args[2:]
+		}
+		runSync(parseSyncFlags(syncArgs))
 	case "help", "-h", "--help":
 		printHelp()
 	default:
