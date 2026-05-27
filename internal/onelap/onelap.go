@@ -2,6 +2,7 @@ package onelap
 
 import (
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -275,16 +276,18 @@ type analysisResponse struct {
 	Message string `json:"message"`
 	Data    struct {
 		RidingRecord struct {
-			// DURL is a pre-signed, time-limited download URL for the FIT file.
-			DURL string `json:"durl"`
-			// FileKey is the raw FIT filename (e.g. "MAGENE_C506SE_xxx.fit").
+			// FileKey is the object-storage path of the FIT file
+			// (e.g. "geo/20260527/Magene_C706_..._.fit"). It is base64-encoded
+			// and used as the path segment for the fit_content endpoint.
 			FileKey string `json:"fileKey"`
 		} `json:"ridingRecord"`
 	} `json:"data"`
 }
 
-// GetDownloadURL fetches the pre-signed FIT file download URL for a specific activity.
-// Calls GET /api/otm/ride_record/analysis/{id} and extracts the durl field.
+// GetDownloadURL builds the authenticated FIT download URL for a specific activity.
+// It calls GET /api/otm/ride_record/analysis/{id} to obtain the fileKey, then
+// returns the fit_content endpoint URL with the base64-encoded fileKey as path.
+// Unlike the previous pre-signed durl, this URL does not expire.
 func (c *Client) GetDownloadURL(activityID string) (string, error) {
 	var result analysisResponse
 
@@ -304,17 +307,20 @@ func (c *Client) GetDownloadURL(activityID string) (string, error) {
 		return "", fmt.Errorf("get activity analysis API error: code=%d, message=%s", result.Code, result.Message)
 	}
 
-	if result.Data.RidingRecord.DURL == "" {
-		return "", fmt.Errorf("activity %s has no download URL (durl is empty)", activityID)
+	fileKey := result.Data.RidingRecord.FileKey
+	if fileKey == "" {
+		return "", fmt.Errorf("activity %s has no fileKey", activityID)
 	}
 
-	return result.Data.RidingRecord.DURL, nil
+	encoded := base64.StdEncoding.EncodeToString([]byte(fileKey))
+	return fmt.Sprintf("%s/analysis/fit_content/%s", RideRecordBaseURL, encoded), nil
 }
 
-// DownloadFIT downloads the FIT file from the given pre-signed URL to destPath.
+// DownloadFIT downloads the FIT file from the given URL to destPath.
+// The URL is the authenticated fit_content endpoint, so the request must
+// carry the same Authorization header / ouid cookie as other ride record APIs.
 func (c *Client) DownloadFIT(durl, destPath string) error {
-	// The durl is a pre-signed URL on fits.rfsvr.net — no auth header needed.
-	resp, err := c.restyClient.R().
+	resp, err := c.authRequest().
 		SetOutput(destPath).
 		Get(durl)
 
