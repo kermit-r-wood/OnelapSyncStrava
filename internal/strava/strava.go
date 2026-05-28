@@ -84,15 +84,38 @@ func (c *Client) Check(configPath string) error {
 	return c.RefreshToken(configPath)
 }
 
-func (c *Client) UploadActivity(filePath, externalID string) error {
+// UploadOptions are runtime-tunable fields forwarded to Strava's /uploads
+// endpoint. Empty/false fields are omitted from the request.
+type UploadOptions struct {
+	Commute     bool
+	Trainer     bool
+	Name        string
+	Description string
+}
+
+func (c *Client) UploadActivity(filePath, externalID string, opts UploadOptions) error {
 	cfg := &config.GlobalConfig.Strava
+	form := map[string]string{
+		"data_type":   "fit",
+		"external_id": externalID,
+	}
+	if opts.Commute {
+		form["commute"] = "1"
+	}
+	if opts.Trainer {
+		form["trainer"] = "1"
+	}
+	if opts.Name != "" {
+		form["name"] = opts.Name
+	}
+	if opts.Description != "" {
+		form["description"] = opts.Description
+	}
+
 	resp, err := c.restyClient.R().
 		SetHeader("Authorization", "Bearer "+cfg.AccessToken).
 		SetFile("file", filePath).
-		SetFormData(map[string]string{
-			"data_type":   "fit",
-			"external_id": externalID,
-		}).
+		SetFormData(form).
 		Post(StravaBaseURL + "/uploads")
 
 	if err != nil {

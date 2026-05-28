@@ -46,6 +46,7 @@ required_configs:
     -   `onelap_password`: Onelap 密码。
     -   `strava_client_id`: 上一步获取的 Client ID。
     -   `strava_client_secret`: 上一步获取的 Client Secret。
+    -   `convert_gcj_to_wgs` *(可选, 布尔)*：是否在上传前把 FIT 中的 GCJ-02 坐标转为 WGS-84。顽鹿下载的 FIT 默认使用国内 GCJ-02 坐标系，若直接上传 Strava 会出现轨迹整体偏移；建议在中国大陆采集的活动设置为 `true`。
 3.  运行 `OnelapSyncStrava check` 进行连通性测试。
 
 ### 第三步：Strava 授权 (OAuth)
@@ -65,9 +66,17 @@ required_configs:
 
 ### 第四步：执行同步
 1.  运行 `OnelapSyncStrava sync` 开始抓取并拉取活动。
-2.  同步完成后，告知用户新增的活动数量。
+2.  常用 `sync` 运行时 flag（互相可组合）：
+    -   `-since=YYYY-MM-DD` 或 `-since=Nd/Nw/Nm/Ny`：补传指定日期/相对时间窗口内的历史活动。
+    -   `-commute`：把本次同步的所有活动在 Strava 上标记为通勤。
+    -   `-trainer`：把本次同步的所有活动标记为室内 / 训练台。
+    -   `-name="..."`：覆盖 Strava 上的活动名称。
+    -   `-description="..."`：写入 Strava 活动描述。
+    -   未指定的 flag 不会传给 Strava，沿用其默认值；本次 `sync` 内的所有活动共享同一组标签，需要区分时应分批运行。
+3.  同步完成后，告知用户新增的活动数量。
 
 ## 3. 故障排除
 -   **授权失败**：检查 Strava Client ID/Secret 是否正确，或尝试重新运行 `auth`。
 -   **登录失败**：检查 Onelap 账号密码及网络连接。
 -   **无新活动**：确认 Onelap 中是否有今日或近期尚未同步的记录。
+-   **Strava 上轨迹整体偏移**：顽鹿 FIT 用的是 GCJ-02 坐标系，而 Strava 使用 WGS-84。把 `config.json` 中的 `convert_gcj_to_wgs` 设为 `true` 后重新 `sync`（已上传的旧活动需要在 Strava 上删除后重传才能更新轨迹）。

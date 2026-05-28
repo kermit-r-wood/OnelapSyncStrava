@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"OnelapSyncStrava/internal/config"
+	"OnelapSyncStrava/internal/fitconv"
 	"OnelapSyncStrava/internal/onelap"
 	"OnelapSyncStrava/internal/strava"
 )
@@ -49,7 +50,8 @@ func main() {
 		if len(os.Args) > 2 {
 			syncArgs = os.Args[2:]
 		}
-		runSync(parseSyncFlags(syncArgs))
+		since, opts := parseSyncFlags(syncArgs)
+		runSync(since, opts)
 	case "help", "-h", "--help":
 		printHelp()
 	default:
@@ -68,6 +70,10 @@ func printHelp() {
 	fmt.Println("  sync    (default) Fetch today's activities and upload to Strava")
 	fmt.Println("          -since=2026-05-01   Sync activities on or after this date")
 	fmt.Println("          -since=7d           Sync the last 7 days  (also: Nw / Nm / Ny — e.g. 6m, 1y)")
+	fmt.Println("          -commute            Mark uploaded activities as commute")
+	fmt.Println("          -trainer            Mark uploaded activities as trainer/indoor")
+	fmt.Println("          -name=\"Morning Ride\" Override the activity name on Strava")
+	fmt.Println("          -description=\"...\"  Set the activity description on Strava")
 	fmt.Println("  auth    Run Strava OAuth flow to get access tokens")
 	fmt.Println("  check   Verify credentials and connectivity")
 	fmt.Println("  status  Show current configuration and sync status")
@@ -106,20 +112,30 @@ func runStatus() {
 	fmt.Printf("Synced Activities: %d\n", len(config.GlobalState.SyncedIDs))
 }
 
-func parseSyncFlags(args []string) time.Time {
+func parseSyncFlags(args []string) (time.Time, strava.UploadOptions) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	since := fs.String("since", "", "Sync activities on or after this date. Accepts YYYY-MM-DD (e.g. 2026-05-01) or a relative duration: Nd / Nw / Nm / Ny (e.g. 7d, 6m). Default: today + yesterday.")
+	commute := fs.Bool("commute", false, "Mark uploaded activities as commute on Strava.")
+	trainer := fs.Bool("trainer", false, "Mark uploaded activities as trainer/indoor on Strava.")
+	name := fs.String("name", "", "Override the activity name on Strava.")
+	description := fs.String("description", "", "Set the activity description on Strava.")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("Failed to parse sync flags: %v", err)
 	}
+	opts := strava.UploadOptions{
+		Commute:     *commute,
+		Trainer:     *trainer,
+		Name:        *name,
+		Description: *description,
+	}
 	if *since == "" {
-		return time.Time{}
+		return time.Time{}, opts
 	}
 	t, err := parseSince(*since, time.Now())
 	if err != nil {
 		log.Fatalf("Invalid -since value: %v", err)
 	}
-	return t
+	return t, opts
 }
 
 func parseSince(s string, now time.Time) (time.Time, error) {
@@ -146,7 +162,7 @@ func parseSince(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%q (expected YYYY-MM-DD or Nd/Nw/Nm/Ny like 7d, 6m, 1y)", s)
 }
 
-func runSync(since time.Time) {
+func runSync(since time.Time, uploadOpts strava.UploadOptions) {
 	onelapClient := onelap.NewClient()
 	stravaClient := strava.NewClient()
 
@@ -216,8 +232,16 @@ func runSync(since time.Time) {
 			continue
 		}
 
+		if config.GlobalConfig.ConvertGCJToWGS {
+			log.Printf("Converting coordinates from GCJ-02 to WGS-84...")
+			if err := fitconv.ConvertFile(fitPath); err != nil {
+				log.Printf("Error converting FIT for activity %s: %v", idStr, err)
+				continue
+			}
+		}
+
 		log.Printf("Uploading to Strava...")
-		if err := stravaClient.UploadActivity(fitPath, idStr); err != nil {
+		if err := stravaClient.UploadActivity(fitPath, idStr, uploadOpts); err != nil {
 			log.Printf("Error uploading to Strava: %v", err)
 		} else {
 			log.Printf("Successfully synced activity %s", idStr)
