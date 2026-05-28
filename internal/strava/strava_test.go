@@ -84,7 +84,7 @@ func TestUploadActivity(t *testing.T) {
 	}
 
 	t.Logf("Uploading FIT file: %s", fitPath)
-	if err := client.UploadActivity(fitPath, "test-upload-id"); err != nil {
+	if err := client.UploadActivity(fitPath, "test-upload-id", UploadOptions{}); err != nil {
 		t.Fatalf("UploadActivity failed: %v", err)
 	}
 

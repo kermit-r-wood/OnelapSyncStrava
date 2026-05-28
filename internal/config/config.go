@@ -20,8 +20,9 @@ type StravaConfig struct {
 }
 
 type Config struct {
-	Onelap OnelapConfig `json:"onelap"`
-	Strava StravaConfig `json:"strava"`
+	Onelap          OnelapConfig `json:"onelap"`
+	Strava          StravaConfig `json:"strava"`
+	ConvertGCJToWGS bool         `json:"convert_gcj_to_wgs"`
 }
 
 var GlobalConfig Config

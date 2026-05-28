@@ -12,6 +12,8 @@
 - **安全登录**：基于原厂 MD5 签名流程，保障账号安全。
 - **聪明地同步**：自动找出还没上传过的记录，不漏传，也不重传。
 - **原始 FIT 数据**：直接抓取最完整的 FIT 文件并上传，骑行细节一丁点都不丢失。
+- **坐标系修正**：可选地把顽鹿 FIT 中的 GCJ-02 坐标转换为 WGS-84，避免 Strava 上轨迹偏移。
+- **活动标签自定义**：上传时可标记 commute/trainer，或自定义活动名称与描述。
 - **省心的 Strava 授权**：支持 Token 自动刷新。配好以后，它就只是个安静的后台同步工具。
 - **灵活的操作方式**：不论是一键全自动同步，还是手动的环境检测，都能找对应的子命令。
 
@@ -66,12 +68,15 @@ go build -o OnelapSyncStrava main.go
     "access_token": "",
     "refresh_token": "",
     "expires_at": 0
-  }
+  },
+  "convert_gcj_to_wgs": true
 }
 ```
 
 > **常见疑问：我都填了 ID 和 Secret，为什么还要跑 `auth` 命令？**
 > 简单来说，ID 和 Secret 是这个“软件”的身份证。而 `auth` 流程是你这位“用户”在亲自点头：我同意把数据授权给它。这步只需要走一次，之后程序拿到 `refresh_token` 就能自动“续命”了。
+
+> **关于 `convert_gcj_to_wgs`**：顽鹿下载的 FIT 文件采用国内 GCJ-02 坐标系，直接上传到 Strava 会发现轨迹整体偏移。设为 `true` 后，程序会在上传前把 FIT 中的经纬度从 GCJ-02 转换为 WGS-84。默认（不填或 `false`）不做转换。
 
 
 ## 使用教程
@@ -133,6 +138,26 @@ go build -o OnelapSyncStrava main.go
 
 依然会按 `state.json` 过滤已同步的记录，所以反复跑不会重复上传。
 
+#### 自定义活动标签 / 名称 / 描述
+
+Strava 的上传接口支持把活动直接标记为「通勤 (commute)」或「室内训练 (trainer)」，也允许覆盖默认的活动名称与描述。本工具把这些选项暴露为 `sync` 子命令的运行时 flag，本次同步的所有活动会共享同一组标签：
+
+```bash
+# 把这次同步的活动统一标记为通勤
+./OnelapSyncStrava sync -commute
+
+# 室内骑行台
+./OnelapSyncStrava sync -trainer
+
+# 自定义名称与描述（注意需要加引号）
+./OnelapSyncStrava sync -name="早晨通勤" -description="顽鹿同步"
+
+# 也可以和 -since 等其它 flag 组合
+./OnelapSyncStrava sync -since=7d -commute
+```
+
+这些字段都是可选的，未指定时上传请求中不会带对应字段，Strava 沿用默认值。
+
 ### 4. 查看状态 (`status`)
 
 你可以随时通过此命令快速检查当前环境配置文件和历史同步情况：
@@ -161,6 +186,7 @@ OnelapSyncStrava/
 ├── .agents/skills/sync_wizard/ # 针对 Agent 辅助工具的使用指南
 ├── internal/
 │   ├── config/                 # 负责读取配置和记录同步状态 
+│   ├── fitconv/                # FIT 文件 GCJ-02 → WGS-84 坐标转换
 │   ├── onelap/                 # 顽鹿 API 客户端代码逻辑
 │   └── strava/                 # Strava OAuth 与上传交互实现
 ├── go.mod
