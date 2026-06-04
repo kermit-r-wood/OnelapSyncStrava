@@ -46,7 +46,7 @@ required_configs:
     -   `onelap_password`: Onelap 密码。
     -   `strava_client_id`: 上一步获取的 Client ID。
     -   `strava_client_secret`: 上一步获取的 Client Secret。
-    -   `convert_gcj_to_wgs` *(可选, 布尔)*：是否在上传前把 FIT 中的 GCJ-02 坐标转为 WGS-84。顽鹿下载的 FIT 默认使用国内 GCJ-02 坐标系，若直接上传 Strava 会出现轨迹整体偏移；建议在中国大陆采集的活动设置为 `true`。
+    -   `convert_gcj_to_wgs` *(可选, 布尔, 默认 false)*：是否在上传前把 FIT 中的 GCJ-02 坐标转为 WGS-84。只有在确认原始 FIT 上传到 Strava 后出现整体偏移，且 GCJ-02 -> WGS-84 后轨迹贴合道路时，才设置为 `true`。
 3.  运行 `OnelapSyncStrava check` 进行连通性测试。
 
 ### 第三步：Strava 授权 (OAuth)
@@ -79,4 +79,4 @@ required_configs:
 -   **授权失败**：检查 Strava Client ID/Secret 是否正确，或尝试重新运行 `auth`。
 -   **登录失败**：检查 Onelap 账号密码及网络连接。
 -   **无新活动**：确认 Onelap 中是否有今日或近期尚未同步的记录。
--   **Strava 上轨迹整体偏移**：顽鹿 FIT 用的是 GCJ-02 坐标系，而 Strava 使用 WGS-84。把 `config.json` 中的 `convert_gcj_to_wgs` 设为 `true` 后重新 `sync`（已上传的旧活动需要在 Strava 上删除后重传才能更新轨迹）。
+-   **Strava 上轨迹整体偏移**：先导出原始轨迹和 GCJ-02 -> WGS-84 后的轨迹，在 WGS 底图上确认哪条贴路。只有转换后贴路时，才把 `config.json` 中的 `convert_gcj_to_wgs` 设为 `true` 后重新 `sync`（已上传的旧活动需要在 Strava 上删除后重传才能更新轨迹）。

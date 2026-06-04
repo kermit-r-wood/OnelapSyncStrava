@@ -9,5 +9,6 @@
     "access_token": "",
     "refresh_token": "",
     "expires_at": 0
-  }
+  },
+  "convert_gcj_to_wgs": false
 }

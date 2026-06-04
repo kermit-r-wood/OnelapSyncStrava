@@ -1,6 +1,5 @@
-// Package fitconv converts FIT files recorded with Onelap (which uses
-// the Chinese GCJ-02 coordinate system) into the international WGS-84
-// coordinate system that Strava expects.
+// Package fitconv optionally converts FIT coordinates from the Chinese GCJ-02
+// coordinate system into the international WGS-84 coordinate system.
 package fitconv
 
 import (
@@ -9,12 +8,34 @@ import (
 	"math"
 	"os"
 
-	"github.com/tormoder/fit"
+	"github.com/tormoder/fit/dyncrc16"
 )
 
 const (
 	gcjA  = 6378245.0
 	gcjEE = 0.00669342162296594323
+
+	fitHeaderSizeNoCRC = 12
+	fitHeaderSizeCRC   = 14
+	fitFileCRCSize     = 2
+	fitDataType        = ".FIT"
+
+	fitCompressedHeaderMask       = 0x80
+	fitCompressedLocalMesgNumMask = 0x60
+	fitMesgDefinitionMask         = 0x40
+	fitDevDataMask                = 0x20
+	fitLocalMesgNumMask           = 0x0f
+
+	fitLittleEndian = 0
+	fitBigEndian    = 1
+
+	fitBaseSint32      = 0x85
+	fitBaseSint32Index = 0x05
+	fitSint32Invalid   = int32(0x7fffffff)
+
+	fitMesgNumSession = 18
+	fitMesgNumLap     = 19
+	fitMesgNumRecord  = 20
 )
 
 // outOfChina returns true when the WGS-84 (lat, lon) lies outside mainland
@@ -76,57 +97,274 @@ func gcj02ToWGS84(gcjLat, gcjLon float64) (float64, float64) {
 	return wgsLat, wgsLon
 }
 
-// ConvertFile reads the FIT file at path, converts every GPS coordinate
-// from GCJ-02 to WGS-84, and writes the result back to the same path.
+type fitFieldDef struct {
+	num      byte
+	size     byte
+	baseType byte
+	offset   int
+}
+
+type fitDefinition struct {
+	globalMsgNum uint16
+	byteOrder    binary.ByteOrder
+	fields       []fitFieldDef
+	dataSize     int
+}
+
+type coordinateFieldPair struct {
+	lat byte
+	lon byte
+}
+
+var coordinatePairsByMessage = map[uint16][]coordinateFieldPair{
+	fitMesgNumRecord: {
+		{lat: 0, lon: 1},
+	},
+	fitMesgNumLap: {
+		{lat: 3, lon: 4},
+		{lat: 5, lon: 6},
+	},
+	fitMesgNumSession: {
+		{lat: 3, lon: 4},
+		{lat: 29, lon: 30},
+		{lat: 31, lon: 32},
+		{lat: 38, lon: 39},
+	},
+}
+
+// ConvertFile reads the FIT file at path, converts GPS coordinate fields from
+// GCJ-02 to WGS-84, and writes the result back to the same path. The converter
+// patches only the existing coordinate bytes and file CRC, preserving message
+// ordering, unknown fields, and developer data.
 func ConvertFile(path string) error {
-	in, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("open fit file: %w", err)
-	}
-	file, err := fit.Decode(in)
-	in.Close()
-	if err != nil {
-		return fmt.Errorf("decode fit file: %w", err)
+		return fmt.Errorf("read fit file: %w", err)
 	}
 
-	if file.Type() != fit.FileTypeActivity {
-		// Only activity files contain GPS records we care about.
+	changed, err := convertFITBytes(data)
+	if err != nil {
+		return err
+	}
+	if !changed {
 		return nil
 	}
 
-	activity, err := file.Activity()
-	if err != nil {
-		return fmt.Errorf("extract activity: %w", err)
-	}
-
-	convertLatLon := func(lat fit.Latitude, lon fit.Longitude) (fit.Latitude, fit.Longitude) {
-		if lat.Invalid() || lon.Invalid() {
-			return lat, lon
-		}
-		newLat, newLon := gcj02ToWGS84(lat.Degrees(), lon.Degrees())
-		return fit.NewLatitudeDegrees(newLat), fit.NewLongitudeDegrees(newLon)
-	}
-
-	for _, r := range activity.Records {
-		r.PositionLat, r.PositionLong = convertLatLon(r.PositionLat, r.PositionLong)
-	}
-	for _, l := range activity.Laps {
-		l.StartPositionLat, l.StartPositionLong = convertLatLon(l.StartPositionLat, l.StartPositionLong)
-		l.EndPositionLat, l.EndPositionLong = convertLatLon(l.EndPositionLat, l.EndPositionLong)
-	}
-	for _, s := range activity.Sessions {
-		s.StartPositionLat, s.StartPositionLong = convertLatLon(s.StartPositionLat, s.StartPositionLong)
-		s.NecLat, s.NecLong = convertLatLon(s.NecLat, s.NecLong)
-		s.SwcLat, s.SwcLong = convertLatLon(s.SwcLat, s.SwcLong)
-	}
-
-	out, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("open fit file for write: %w", err)
-	}
-	defer out.Close()
-	if err := fit.Encode(out, file, binary.LittleEndian); err != nil {
-		return fmt.Errorf("encode fit file: %w", err)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write converted fit file: %w", err)
 	}
 	return nil
+}
+
+func convertFITBytes(buf []byte) (bool, error) {
+	_, dataStart, dataEnd, crcOffset, err := fitDataBounds(buf)
+	if err != nil {
+		return false, err
+	}
+
+	definitions := make([]*fitDefinition, 16)
+	changed := false
+	for pos := dataStart; pos < dataEnd; {
+		recordHeader := buf[pos]
+		pos++
+
+		switch {
+		case recordHeader&fitCompressedHeaderMask == fitCompressedHeaderMask:
+			localMsgNum := (recordHeader & fitCompressedLocalMesgNumMask) >> 5
+			def := definitions[localMsgNum]
+			if def == nil {
+				return false, fmt.Errorf("decode fit file: missing definition for local message %d", localMsgNum)
+			}
+			if pos+def.dataSize > dataEnd {
+				return false, fmt.Errorf("decode fit file: data message exceeds declared data size")
+			}
+			if patchDataMessage(buf[pos:pos+def.dataSize], def) {
+				changed = true
+			}
+			pos += def.dataSize
+
+		case recordHeader&fitMesgDefinitionMask == fitMesgDefinitionMask:
+			def, next, err := parseDefinition(buf, pos, dataEnd, recordHeader)
+			if err != nil {
+				return false, err
+			}
+			definitions[recordHeader&fitLocalMesgNumMask] = def
+			pos = next
+
+		default:
+			localMsgNum := recordHeader & fitLocalMesgNumMask
+			def := definitions[localMsgNum]
+			if def == nil {
+				return false, fmt.Errorf("decode fit file: missing definition for local message %d", localMsgNum)
+			}
+			if pos+def.dataSize > dataEnd {
+				return false, fmt.Errorf("decode fit file: data message exceeds declared data size")
+			}
+			if patchDataMessage(buf[pos:pos+def.dataSize], def) {
+				changed = true
+			}
+			pos += def.dataSize
+		}
+	}
+
+	if changed {
+		binary.LittleEndian.PutUint16(buf[crcOffset:crcOffset+fitFileCRCSize], dyncrc16.Checksum(buf[:crcOffset]))
+	}
+	return changed, nil
+}
+
+func fitDataBounds(buf []byte) (headerSize, dataStart, dataEnd, crcOffset int, err error) {
+	if len(buf) < fitHeaderSizeNoCRC+fitFileCRCSize {
+		return 0, 0, 0, 0, fmt.Errorf("decode fit file: file too small")
+	}
+	headerSize = int(buf[0])
+	if headerSize != fitHeaderSizeNoCRC && headerSize != fitHeaderSizeCRC {
+		return 0, 0, 0, 0, fmt.Errorf("decode fit file: illegal header size %d", headerSize)
+	}
+	if len(buf) < headerSize+fitFileCRCSize {
+		return 0, 0, 0, 0, fmt.Errorf("decode fit file: truncated header")
+	}
+	dataSize := int(binary.LittleEndian.Uint32(buf[4:8]))
+	if string(buf[8:12]) != fitDataType {
+		return 0, 0, 0, 0, fmt.Errorf("decode fit file: header data type was not %q", fitDataType)
+	}
+	dataStart = headerSize
+	dataEnd = dataStart + dataSize
+	crcOffset = dataEnd
+	if crcOffset+fitFileCRCSize > len(buf) {
+		return 0, 0, 0, 0, fmt.Errorf("decode fit file: truncated data or CRC")
+	}
+	return headerSize, dataStart, dataEnd, crcOffset, nil
+}
+
+func parseDefinition(buf []byte, pos, dataEnd int, recordHeader byte) (*fitDefinition, int, error) {
+	if pos+5 > dataEnd {
+		return nil, pos, fmt.Errorf("decode fit file: truncated definition message")
+	}
+
+	pos++ // reserved
+	arch := buf[pos]
+	pos++
+
+	var order binary.ByteOrder
+	switch arch {
+	case fitLittleEndian:
+		order = binary.LittleEndian
+	case fitBigEndian:
+		order = binary.BigEndian
+	default:
+		return nil, pos, fmt.Errorf("decode fit file: unknown architecture %#x", arch)
+	}
+
+	globalMsgNum := order.Uint16(buf[pos : pos+2])
+	pos += 2
+	fieldCount := int(buf[pos])
+	pos++
+	if pos+fieldCount*3 > dataEnd {
+		return nil, pos, fmt.Errorf("decode fit file: truncated field definitions")
+	}
+
+	fields := make([]fitFieldDef, 0, fieldCount)
+	dataOffset := 0
+	for i := 0; i < fieldCount; i++ {
+		field := fitFieldDef{
+			num:      buf[pos],
+			size:     buf[pos+1],
+			baseType: buf[pos+2],
+			offset:   dataOffset,
+		}
+		pos += 3
+		fields = append(fields, field)
+		dataOffset += int(field.size)
+	}
+
+	if recordHeader&fitDevDataMask == fitDevDataMask {
+		if pos >= dataEnd {
+			return nil, pos, fmt.Errorf("decode fit file: truncated developer field count")
+		}
+		devFieldCount := int(buf[pos])
+		pos++
+		if pos+devFieldCount*3 > dataEnd {
+			return nil, pos, fmt.Errorf("decode fit file: truncated developer field definitions")
+		}
+		for i := 0; i < devFieldCount; i++ {
+			dataOffset += int(buf[pos+1])
+			pos += 3
+		}
+	}
+
+	return &fitDefinition{
+		globalMsgNum: globalMsgNum,
+		byteOrder:    order,
+		fields:       fields,
+		dataSize:     dataOffset,
+	}, pos, nil
+}
+
+func patchDataMessage(data []byte, def *fitDefinition) bool {
+	pairs := coordinatePairsByMessage[def.globalMsgNum]
+	if len(pairs) == 0 {
+		return false
+	}
+
+	changed := false
+	for _, pair := range pairs {
+		latField, latOK := def.field(pair.lat)
+		lonField, lonOK := def.field(pair.lon)
+		if !latOK || !lonOK || !latField.isSint32() || !lonField.isSint32() {
+			continue
+		}
+		if latField.offset+4 > len(data) || lonField.offset+4 > len(data) {
+			continue
+		}
+
+		latSemi := int32(def.byteOrder.Uint32(data[latField.offset : latField.offset+4]))
+		lonSemi := int32(def.byteOrder.Uint32(data[lonField.offset : lonField.offset+4]))
+		if latSemi == fitSint32Invalid || lonSemi == fitSint32Invalid {
+			continue
+		}
+
+		newLat, newLon := gcj02ToWGS84(semicirclesToDegrees(latSemi), semicirclesToDegrees(lonSemi))
+		newLatSemi, latValid := degreesToLatitudeSemicircles(newLat)
+		newLonSemi, lonValid := degreesToLongitudeSemicircles(newLon)
+		if !latValid || !lonValid || (newLatSemi == latSemi && newLonSemi == lonSemi) {
+			continue
+		}
+
+		def.byteOrder.PutUint32(data[latField.offset:latField.offset+4], uint32(newLatSemi))
+		def.byteOrder.PutUint32(data[lonField.offset:lonField.offset+4], uint32(newLonSemi))
+		changed = true
+	}
+	return changed
+}
+
+func (d *fitDefinition) field(num byte) (fitFieldDef, bool) {
+	for _, field := range d.fields {
+		if field.num == num {
+			return field, true
+		}
+	}
+	return fitFieldDef{}, false
+}
+
+func (f fitFieldDef) isSint32() bool {
+	return f.size == 4 && (f.baseType == fitBaseSint32 || f.baseType&0x1f == fitBaseSint32Index)
+}
+
+func semicirclesToDegrees(semicircles int32) float64 {
+	return float64(semicircles) * 180.0 / math.Pow(2, 31)
+}
+
+func degreesToLatitudeSemicircles(degrees float64) (int32, bool) {
+	if degrees >= 90 || degrees <= -90 {
+		return fitSint32Invalid, false
+	}
+	return int32(degrees * math.Pow(2, 31) / 180.0), true
+}
+
+func degreesToLongitudeSemicircles(degrees float64) (int32, bool) {
+	if degrees >= 180 || degrees <= -180 {
+		return fitSint32Invalid, false
+	}
+	return int32(degrees * math.Pow(2, 31) / 180.0), true
 }
