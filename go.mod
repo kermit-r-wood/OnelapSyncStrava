@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/tormoder/fit v0.15.0
+	golang.org/x/net v0.43.0
 )
 
 require (
@@ -16,7 +17,6 @@ require (
 	github.com/mdempsky/unconvert v0.0.0-20230125054757-2661c2c99a9b // indirect
 	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
 	golang.org/x/mod v0.26.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect

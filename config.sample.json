@@ -4,6 +4,8 @@
     "password": "YOUR_ONELAP_PASSWORD"
   },
   "strava": {
+    "upload_method": "web",
+    "web_cookie_header": "Cookie: YOUR_STRAVA_COOKIE_HEADER",
     "client_id": "YOUR_STRAVA_CLIENT_ID",
     "client_secret": "YOUR_STRAVA_CLIENT_SECRET",
     "access_token": "",

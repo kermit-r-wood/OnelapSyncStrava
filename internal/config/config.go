@@ -12,11 +12,13 @@ type OnelapConfig struct {
 }
 
 type StravaConfig struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"` // Unix timestamp
+	ClientID        string `json:"client_id"`
+	ClientSecret    string `json:"client_secret"`
+	AccessToken     string `json:"access_token"`
+	RefreshToken    string `json:"refresh_token"`
+	ExpiresAt       int64  `json:"expires_at"` // Unix timestamp
+	UploadMethod    string `json:"upload_method"`
+	WebCookieHeader string `json:"web_cookie_header"`
 }
 
 type Config struct {
@@ -51,6 +53,12 @@ func LoadConfig(path string) error {
 	}
 	if v := os.Getenv("STRAVA_CLIENT_SECRET"); v != "" {
 		GlobalConfig.Strava.ClientSecret = v
+	}
+	if v := os.Getenv("STRAVA_UPLOAD_METHOD"); v != "" {
+		GlobalConfig.Strava.UploadMethod = v
+	}
+	if v := os.Getenv("STRAVA_WEB_COOKIE_HEADER"); v != "" {
+		GlobalConfig.Strava.WebCookieHeader = v
 	}
 
 	return nil
