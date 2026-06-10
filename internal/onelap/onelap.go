@@ -280,6 +280,15 @@ type analysisResponse struct {
 			// (e.g. "geo/20260527/Magene_C706_..._.fit"). It is base64-encoded
 			// and used as the path segment for the fit_content endpoint.
 			FileKey string `json:"fileKey"`
+			// FitURL is the activity-file path. For device-recorded outdoor rides it
+			// equals FileKey; for indoor trainer "course"/MATCH sessions (Type 15, which
+			// have no FileKey) it points to a proprietary ".st" log
+			// (e.g. "MATCH_<uid>-2026-06-01-16-28-32-log.st"). The fit_content endpoint
+			// transcodes the ".st" into a valid FIT server-side, so it is a usable fallback.
+			FitURL string `json:"fitUrl"`
+			// Type is the ride type code: 27 = device-recorded outdoor, 15 = indoor
+			// trainer course session.
+			Type int `json:"type"`
 		} `json:"ridingRecord"`
 	} `json:"data"`
 }
@@ -307,12 +316,18 @@ func (c *Client) GetDownloadURL(activityID string) (string, error) {
 		return "", fmt.Errorf("get activity analysis API error: code=%d, message=%s", result.Code, result.Message)
 	}
 
-	fileKey := result.Data.RidingRecord.FileKey
-	if fileKey == "" {
-		return "", fmt.Errorf("activity %s has no fileKey", activityID)
+	// Outdoor rides expose FileKey; indoor trainer course sessions expose only FitURL
+	// (a ".st" log). Both are accepted by the fit_content endpoint, which returns/transcodes
+	// a valid FIT either way, so fall back to FitURL when FileKey is absent.
+	key := result.Data.RidingRecord.FileKey
+	if key == "" {
+		key = result.Data.RidingRecord.FitURL
+	}
+	if key == "" {
+		return "", fmt.Errorf("activity %s has no fileKey or fitUrl", activityID)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(fileKey))
+	encoded := base64.StdEncoding.EncodeToString([]byte(key))
 	return fmt.Sprintf("%s/analysis/fit_content/%s", RideRecordBaseURL, encoded), nil
 }
 
