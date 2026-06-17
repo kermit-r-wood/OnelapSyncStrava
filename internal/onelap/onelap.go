@@ -119,7 +119,7 @@ type Activity struct {
 	ExternalID  string  `json:"id"`               // Unique activity ID
 	StartTime   string  `json:"start_riding_time"` // Format: "2026-05-07 21:30:51"
 	DistanceKm  float64 `json:"distance_km"`
-	TimeSeconds int     `json:"time_seconds"`
+	TimeSeconds float64 `json:"time_seconds"`
 	// DURL is populated by GetDownloadURL, not present in the list response.
 	DURL string `json:"-"`
 }

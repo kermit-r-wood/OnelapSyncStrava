@@ -3,6 +3,7 @@ package onelap
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -178,6 +179,41 @@ func listResponseBody(t *testing.T, activities []Activity, hasMore bool) []byte 
 		t.Fatalf("failed to marshal list response: %v", err)
 	}
 	return b
+}
+
+func TestGetRecentActivities_AllowsFractionalTimeSeconds(t *testing.T) {
+	body := []byte(`{
+		"code": 200,
+		"message": "ok",
+		"data": {
+			"list": [{
+				"id": "fractional",
+				"start_riding_time": "2026-06-18 01:50:33",
+				"distance_km": 100.5,
+				"time_seconds": 24256.06
+			}],
+			"pagination": {
+				"has_more": false
+			}
+		}
+	}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	c := newMockClient(srv)
+	got, err := c.GetRecentActivities(1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d activities, want 1: %+v", len(got), got)
+	}
+	if diff := math.Abs(float64(got[0].TimeSeconds) - 24256.06); diff > 0.001 {
+		t.Fatalf("TimeSeconds = %v, want 24256.06", got[0].TimeSeconds)
+	}
 }
 
 // TestGetActivitiesSince_ShortCircuitsOnOlderRecord verifies pagination stops
