@@ -24,6 +24,11 @@ const (
 	statePath  = "state.json"
 )
 
+const (
+	defaultUploadBatchSize = 15
+	defaultUploadDelay     = 2 * time.Minute
+)
+
 type stravaUploadMethod string
 
 const (
@@ -33,6 +38,20 @@ const (
 
 type stravaUploader interface {
 	UploadActivity(filePath, externalID string, opts strava.UploadOptions) error
+}
+
+type stravaBatchUploader interface {
+	UploadActivities(filePaths []string, opts strava.UploadOptions) error
+}
+
+type uploadPacing struct {
+	BatchSize int
+	Delay     time.Duration
+}
+
+type uploadItem struct {
+	Path       string
+	ExternalID string
 }
 
 func main() {
@@ -62,14 +81,14 @@ func main() {
 		if len(os.Args) > 2 {
 			syncArgs = os.Args[2:]
 		}
-		since, opts := parseSyncFlags(syncArgs)
-		runSync(since, opts)
+		since, opts, pacing := parseSyncFlags(syncArgs)
+		runSync(since, opts, pacing)
 	case "upload-fit":
-		path, opts, err := parseUploadFitFlags(os.Args[2:])
+		path, opts, pacing, err := parseUploadFitFlags(os.Args[2:])
 		if err != nil {
 			log.Fatalf("Invalid upload-fit arguments: %v", err)
 		}
-		runUploadFit(path, opts)
+		runUploadFit(path, opts, pacing)
 	case "help", "-h", "--help":
 		printHelp()
 	default:
@@ -93,10 +112,12 @@ func printHelp() {
 	fmt.Println("          -trainer            API mode only: mark uploaded activities as trainer/indoor")
 	fmt.Println("          -name=\"Morning Ride\" API mode only: override the activity name on Strava")
 	fmt.Println("          -description=\"...\"  API mode only: set the activity description on Strava")
+	fmt.Println("          -upload-batch=15    Upload at most this many files before waiting")
+	fmt.Println("          -upload-delay=2m    Wait between upload batches")
 	fmt.Println("  auth    API mode only: run Strava OAuth flow to get access tokens")
 	fmt.Println("  check   Verify credentials and connectivity")
 	fmt.Println("  status  Show current configuration and sync status")
-	fmt.Println("  upload-fit <path>  Upload one local activity file (FIT/GPX/TCX) via the configured Strava upload method")
+	fmt.Println("  upload-fit <path>  Upload one local FIT file or a directory of FIT files")
 }
 
 func runCheck() {
@@ -221,15 +242,21 @@ func checkConfiguredStrava(configPath string) error {
 	}
 }
 
-func parseSyncFlags(args []string) (time.Time, strava.UploadOptions) {
+func parseSyncFlags(args []string) (time.Time, strava.UploadOptions, uploadPacing) {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	since := fs.String("since", "", "Sync activities on or after this date. Accepts YYYY-MM-DD (e.g. 2026-05-01) or a relative duration: Nd / Nw / Nm / Ny (e.g. 7d, 6m). Default: today + yesterday.")
 	commute := fs.Bool("commute", false, "Mark uploaded activities as commute on Strava.")
 	trainer := fs.Bool("trainer", false, "Mark uploaded activities as trainer/indoor on Strava.")
 	name := fs.String("name", "", "Override the activity name on Strava.")
 	description := fs.String("description", "", "Set the activity description on Strava.")
+	uploadBatch := fs.Int("upload-batch", defaultUploadBatchSize, "Upload at most this many files before waiting.")
+	uploadDelay := fs.Duration("upload-delay", defaultUploadDelay, "Wait between upload batches, e.g. 30m, 12h, 0s.")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("Failed to parse sync flags: %v", err)
+	}
+	pacing, err := newUploadPacing(*uploadBatch, *uploadDelay)
+	if err != nil {
+		log.Fatalf("Invalid upload pacing: %v", err)
 	}
 	opts := strava.UploadOptions{
 		Commute:     *commute,
@@ -238,37 +265,43 @@ func parseSyncFlags(args []string) (time.Time, strava.UploadOptions) {
 		Description: *description,
 	}
 	if *since == "" {
-		return time.Time{}, opts
+		return time.Time{}, opts, pacing
 	}
 	t, err := parseSince(*since, time.Now())
 	if err != nil {
 		log.Fatalf("Invalid -since value: %v", err)
 	}
-	return t, opts
+	return t, opts, pacing
 }
 
-func parseUploadFitFlags(args []string) (string, strava.UploadOptions, error) {
+func parseUploadFitFlags(args []string) (string, strava.UploadOptions, uploadPacing, error) {
 	fs := flag.NewFlagSet("upload-fit", flag.ContinueOnError)
 	commute := fs.Bool("commute", false, "API mode only: mark uploaded activity as commute on Strava.")
 	trainer := fs.Bool("trainer", false, "API mode only: mark uploaded activity as trainer/indoor on Strava.")
 	name := fs.String("name", "", "API mode only: override the activity name on Strava.")
 	description := fs.String("description", "", "API mode only: set the activity description on Strava.")
+	uploadBatch := fs.Int("upload-batch", defaultUploadBatchSize, "Upload at most this many files before waiting.")
+	uploadDelay := fs.Duration("upload-delay", defaultUploadDelay, "Wait between upload batches, e.g. 30m, 12h, 0s.")
 	orderedArgs, err := reorderUploadFitArgs(args)
 	if err != nil {
-		return "", strava.UploadOptions{}, err
+		return "", strava.UploadOptions{}, uploadPacing{}, err
 	}
 	if err := fs.Parse(orderedArgs); err != nil {
-		return "", strava.UploadOptions{}, err
+		return "", strava.UploadOptions{}, uploadPacing{}, err
 	}
 	if fs.NArg() != 1 {
-		return "", strava.UploadOptions{}, fmt.Errorf("expected exactly one fit file path")
+		return "", strava.UploadOptions{}, uploadPacing{}, fmt.Errorf("expected exactly one fit file path or directory")
+	}
+	pacing, err := newUploadPacing(*uploadBatch, *uploadDelay)
+	if err != nil {
+		return "", strava.UploadOptions{}, uploadPacing{}, err
 	}
 	return fs.Arg(0), strava.UploadOptions{
 		Commute:     *commute,
 		Trainer:     *trainer,
 		Name:        *name,
 		Description: *description,
-	}, nil
+	}, pacing, nil
 }
 
 func reorderUploadFitArgs(args []string) ([]string, error) {
@@ -286,7 +319,7 @@ func reorderUploadFitArgs(args []string) ([]string, error) {
 		}
 		flags = append(flags, arg)
 		name := strings.TrimLeft(strings.SplitN(arg, "=", 2)[0], "-")
-		if (name == "name" || name == "description") && !strings.Contains(arg, "=") {
+		if (name == "name" || name == "description" || name == "upload-batch" || name == "upload-delay") && !strings.Contains(arg, "=") {
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("flag needs an argument: -%s", name)
 			}
@@ -295,6 +328,16 @@ func reorderUploadFitArgs(args []string) ([]string, error) {
 		}
 	}
 	return append(flags, positional...), nil
+}
+
+func newUploadPacing(batchSize int, delay time.Duration) (uploadPacing, error) {
+	if batchSize < 1 {
+		return uploadPacing{}, fmt.Errorf("upload-batch must be at least 1")
+	}
+	if delay < 0 {
+		return uploadPacing{}, fmt.Errorf("upload-delay must not be negative")
+	}
+	return uploadPacing{BatchSize: batchSize, Delay: delay}, nil
 }
 
 func parseSince(s string, now time.Time) (time.Time, error) {
@@ -321,7 +364,7 @@ func parseSince(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%q (expected YYYY-MM-DD or Nd/Nw/Nm/Ny like 7d, 6m, 1y)", s)
 }
 
-func runUploadFit(filePath string, uploadOpts strava.UploadOptions) {
+func runUploadFit(path string, uploadOpts strava.UploadOptions, pacing uploadPacing) {
 	stravaUploader, uploadMethod, err := newConfiguredStravaUploader()
 	if err != nil {
 		log.Fatalf("Strava upload configuration error: %v", err)
@@ -329,7 +372,8 @@ func runUploadFit(filePath string, uploadOpts strava.UploadOptions) {
 	if err := validateUploadOptionsForMethod(uploadMethod, uploadOpts); err != nil {
 		log.Fatalf("Strava upload option error: %v", err)
 	}
-	if _, err := os.Stat(filePath); err != nil {
+	files, err := collectUploadFiles(path)
+	if err != nil {
 		log.Fatalf("Activity file error: %v", err)
 	}
 
@@ -345,15 +389,21 @@ func runUploadFit(filePath string, uploadOpts strava.UploadOptions) {
 		}
 	}
 
-	log.Printf("Uploading activity file to Strava: %s", filePath)
-	externalID := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	if err := stravaUploader.UploadActivity(filePath, externalID, uploadOpts); err != nil {
+	var items []uploadItem
+	for _, filePath := range files {
+		items = append(items, uploadItem{
+			Path:       filePath,
+			ExternalID: strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath)),
+		})
+	}
+	uploaded, err := uploadActivityItems(stravaUploader, uploadMethod, items, uploadOpts, pacing, nil)
+	if err != nil {
 		log.Fatalf("Error uploading to Strava: %v", err)
 	}
-	log.Println("Upload submitted to Strava.")
+	log.Printf("Upload submitted to Strava. %d file(s) queued.", uploaded)
 }
 
-func runSync(since time.Time, uploadOpts strava.UploadOptions) {
+func runSync(since time.Time, uploadOpts strava.UploadOptions, pacing uploadPacing) {
 	onelapClient := onelap.NewClient()
 	stravaUploader, uploadMethod, err := newConfiguredStravaUploader()
 	if err != nil {
@@ -402,14 +452,14 @@ func runSync(since time.Time, uploadOpts strava.UploadOptions) {
 		}
 	}
 
-	// 4. Download and Upload
+	// 4. Download
 	tmpDir := "tmp"
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		log.Fatalf("Error creating tmp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	syncedCount := 0
+	var pending []uploadItem
 	for _, act := range activities {
 		idStr := act.ExternalID
 
@@ -443,20 +493,118 @@ func runSync(since time.Time, uploadOpts strava.UploadOptions) {
 			}
 		}
 
-		log.Printf("Uploading to Strava...")
-		if err := stravaUploader.UploadActivity(fitPath, idStr, uploadOpts); err != nil {
-			log.Printf("Error uploading to Strava: %v", err)
-		} else {
-			log.Printf("Successfully synced activity %s", idStr)
-			config.AddSyncedID(idStr)
-			syncedCount++
-		}
+		pending = append(pending, uploadItem{Path: fitPath, ExternalID: idStr})
 	}
 
-	if syncedCount > 0 {
+	syncedCount, err := uploadActivityItems(stravaUploader, uploadMethod, pending, uploadOpts, pacing, func(items []uploadItem) {
+		for _, item := range items {
+			log.Printf("Successfully synced activity %s", item.ExternalID)
+			config.AddSyncedID(item.ExternalID)
+		}
 		if err := config.SaveState(statePath); err != nil {
 			log.Printf("Warning: failed to save state: %v", err)
 		}
+	})
+	if err != nil {
+		log.Printf("Stopped uploading to Strava: %v", err)
 	}
 	log.Printf("Sync complete. %d new activities synced.", syncedCount)
+}
+
+func collectUploadFiles(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		if !strings.EqualFold(filepath.Ext(path), ".fit") {
+			return nil, fmt.Errorf("only FIT files are supported: %s", path)
+		}
+		return []string{path}, nil
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".fit") {
+			files = append(files, filepath.Join(path, entry.Name()))
+		}
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no FIT files found in %s", path)
+	}
+	return files, nil
+}
+
+func uploadActivityItems(uploader stravaUploader, method stravaUploadMethod, items []uploadItem, opts strava.UploadOptions, pacing uploadPacing, onSuccess func([]uploadItem)) (int, error) {
+	success := 0
+	for start := 0; start < len(items); start += pacing.BatchSize {
+		end := start + pacing.BatchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[start:end]
+		succeeded, err := uploadActivityBatch(uploader, method, batch, opts)
+		if len(succeeded) > 0 {
+			success += len(succeeded)
+			if onSuccess != nil {
+				onSuccess(succeeded)
+			}
+		}
+		if err != nil {
+			return success, err
+		}
+		if end < len(items) && pacing.Delay > 0 {
+			log.Printf("Uploaded %d/%d queued file(s); waiting %s before next batch...", success, len(items), pacing.Delay)
+			time.Sleep(pacing.Delay)
+		}
+	}
+	return success, nil
+}
+
+func uploadActivityBatch(uploader stravaUploader, method stravaUploadMethod, batch []uploadItem, opts strava.UploadOptions) ([]uploadItem, error) {
+	if method == stravaUploadMethodWeb {
+		batchUploader, ok := uploader.(stravaBatchUploader)
+		if !ok {
+			return nil, fmt.Errorf("configured Strava web uploader does not support batch upload")
+		}
+		var paths []string
+		for _, item := range batch {
+			paths = append(paths, item.Path)
+		}
+		log.Printf("Uploading %d file(s) to Strava...", len(paths))
+		if err := batchUploader.UploadActivities(paths, opts); err != nil {
+			return nil, err
+		}
+		return batch, nil
+	}
+
+	var succeeded []uploadItem
+	var firstErr error
+	for _, item := range batch {
+		log.Printf("Uploading activity file to Strava: %s", item.Path)
+		if err := uploader.UploadActivity(item.Path, item.ExternalID, opts); err != nil {
+			log.Printf("Error uploading to Strava: %v", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			if isRateLimitError(err) {
+				return succeeded, err
+			}
+			continue
+		}
+		succeeded = append(succeeded, item)
+	}
+	return succeeded, firstErr
+}
+
+func isRateLimitError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit")
 }

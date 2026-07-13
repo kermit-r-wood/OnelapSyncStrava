@@ -93,6 +93,51 @@ func TestWebClientUploadsFITWithFreshCSRFAndSessionCookie(t *testing.T) {
 	}
 }
 
+func TestWebClientUploadsMultipleFilesInOneRequest(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{
+		filepath.Join(dir, "one.fit"),
+		filepath.Join(dir, "two.gpx"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/upload/select":
+			fmt.Fprint(w, `<meta name="csrf-token" content="fresh-csrf">`)
+		case "/upload/files":
+			posts++
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("ParseMultipartForm: %v", err)
+			}
+			files := r.MultipartForm.File["files[]"]
+			if len(files) != 2 {
+				t.Fatalf("files[] count = %d, want 2", len(files))
+			}
+			fmt.Fprint(w, "ok")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewWebClient(WebOptions{BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("NewWebClient: %v", err)
+	}
+	if err := client.UploadActivities(paths, UploadOptions{}); err != nil {
+		t.Fatalf("UploadActivities() error = %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("posts = %d, want 1", posts)
+	}
+}
+
 func TestWebClientLoadsCookieHeaderOptionBeforeFetchingToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/upload/select" {

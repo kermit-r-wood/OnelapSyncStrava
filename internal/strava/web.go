@@ -83,20 +83,21 @@ func (c *WebClient) Check() error {
 
 func (c *WebClient) UploadActivity(filePath, externalID string, opts UploadOptions) error {
 	_ = externalID
+	return c.UploadActivities([]string{filePath}, opts)
+}
+
+func (c *WebClient) UploadActivities(filePaths []string, opts UploadOptions) error {
 	if opts.Commute || opts.Trainer || opts.Name != "" || opts.Description != "" {
 		return fmt.Errorf("commute, trainer, name and description are not supported by Strava web upload")
+	}
+	if len(filePaths) == 0 {
+		return nil
 	}
 
 	token, err := c.fetchCSRFToken()
 	if err != nil {
 		return err
 	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("open activity file: %w", err)
-	}
-	defer file.Close()
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -106,12 +107,23 @@ func (c *WebClient) UploadActivity(filePath, externalID string, opts UploadOptio
 	if err := writer.WriteField("authenticity_token", token); err != nil {
 		return fmt.Errorf("write authenticity_token field: %w", err)
 	}
-	part, err := writer.CreateFormFile("files[]", filepath.Base(filePath))
-	if err != nil {
-		return fmt.Errorf("create files[] field: %w", err)
-	}
-	if _, err := io.Copy(part, file); err != nil {
-		return fmt.Errorf("write activity file field: %w", err)
+	for _, filePath := range filePaths {
+		file, err := os.Open(filePath)
+		if err != nil {
+			return fmt.Errorf("open activity file: %w", err)
+		}
+		part, err := writer.CreateFormFile("files[]", filepath.Base(filePath))
+		if err != nil {
+			file.Close()
+			return fmt.Errorf("create files[] field: %w", err)
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			file.Close()
+			return fmt.Errorf("write activity file field: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close activity file: %w", err)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close multipart writer: %w", err)

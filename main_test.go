@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,19 +235,31 @@ func TestValidateUploadOptionsAllowsAPIFields(t *testing.T) {
 }
 
 func TestParseUploadFitFlagsRequiresPath(t *testing.T) {
-	_, _, err := parseUploadFitFlags(nil)
+	_, _, _, err := parseUploadFitFlags(nil)
 	if err == nil || !strings.Contains(err.Error(), "fit file path") {
 		t.Fatalf("parseUploadFitFlags(nil) error = %v, want path error", err)
 	}
 }
 
+func TestParseSyncFlagsDefaultsUploadPacing(t *testing.T) {
+	_, _, pacing := parseSyncFlags(nil)
+	if pacing.BatchSize != 15 {
+		t.Fatalf("BatchSize = %d, want 15", pacing.BatchSize)
+	}
+	if pacing.Delay != 2*time.Minute {
+		t.Fatalf("Delay = %s, want 2m", pacing.Delay)
+	}
+}
+
 func TestParseUploadFitFlagsParsesPathAndAPIOptions(t *testing.T) {
-	path, opts, err := parseUploadFitFlags([]string{
+	path, opts, pacing, err := parseUploadFitFlags([]string{
 		"activity.fit",
 		"-commute",
 		"-trainer",
 		"-name=Morning Ride",
 		"-description=Uploaded from Onelap",
+		"-upload-batch=25",
+		"-upload-delay=30m",
 	})
 	if err != nil {
 		t.Fatalf("parseUploadFitFlags() error = %v", err)
@@ -257,4 +270,68 @@ func TestParseUploadFitFlagsParsesPathAndAPIOptions(t *testing.T) {
 	if !opts.Commute || !opts.Trainer || opts.Name != "Morning Ride" || opts.Description != "Uploaded from Onelap" {
 		t.Fatalf("opts = %+v", opts)
 	}
+	if pacing.BatchSize != 25 || pacing.Delay != 30*time.Minute {
+		t.Fatalf("pacing = %+v, want 25 and 30m", pacing)
+	}
+}
+
+func TestCollectUploadFilesAcceptsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"b.gpx", "a.fit", "c.tcx", "B.FIT", "skip.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("data"), 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	got, err := collectUploadFiles(dir)
+	if err != nil {
+		t.Fatalf("collectUploadFiles() error = %v", err)
+	}
+	var bases []string
+	for _, path := range got {
+		bases = append(bases, filepath.Base(path))
+	}
+	want := []string{"B.FIT", "a.fit"}
+	if strings.Join(bases, ",") != strings.Join(want, ",") {
+		t.Fatalf("files = %v, want %v", bases, want)
+	}
+}
+
+func TestCollectUploadFilesRejectsNonFITFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.gpx")
+	if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := collectUploadFiles(path)
+	if err == nil || !strings.Contains(err.Error(), "only FIT files") {
+		t.Fatalf("collectUploadFiles() error = %v, want FIT-only error", err)
+	}
+}
+
+func TestUploadActivityItemsReturnsAPIUploadError(t *testing.T) {
+	uploader := fakeUploader{failPath: "bad.fit"}
+	items := []uploadItem{
+		{Path: "good.fit", ExternalID: "good"},
+		{Path: "bad.fit", ExternalID: "bad"},
+	}
+
+	uploaded, err := uploadActivityItems(uploader, stravaUploadMethodAPI, items, strava.UploadOptions{}, uploadPacing{BatchSize: 2}, nil)
+	if err == nil || !strings.Contains(err.Error(), "bad.fit") {
+		t.Fatalf("uploadActivityItems() error = %v, want bad.fit error", err)
+	}
+	if uploaded != 1 {
+		t.Fatalf("uploaded = %d, want 1", uploaded)
+	}
+}
+
+type fakeUploader struct {
+	failPath string
+}
+
+func (f fakeUploader) UploadActivity(filePath, externalID string, opts strava.UploadOptions) error {
+	if filePath == f.failPath {
+		return fmt.Errorf("upload failed for %s", filePath)
+	}
+	return nil
 }
