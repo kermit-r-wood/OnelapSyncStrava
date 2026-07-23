@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -179,6 +180,49 @@ func listResponseBody(t *testing.T, activities []Activity, hasMore bool) []byte 
 		t.Fatalf("failed to marshal list response: %v", err)
 	}
 	return b
+}
+
+func TestLogin_UsesCurrentWebProtocol(t *testing.T) {
+	var gotBody struct {
+		Account  string `json:"account"`
+		Password string `json:"password"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/login" {
+			t.Errorf("path = %q, want /api/login", r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json;charset=utf-8" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		if got := r.Header.Get("Origin"); got != "https://www.onelap.cn" {
+			t.Errorf("Origin = %q", got)
+		}
+		if got := r.Header.Get("Referer"); got != "https://www.onelap.cn/login.html" {
+			t.Errorf("Referer = %q", got)
+		}
+		nonce := r.Header.Get("nonce")
+		if !regexp.MustCompile(`^[A-Za-z0-9]{16}$`).MatchString(nonce) {
+			t.Errorf("nonce = %q, want 16 alphanumeric characters", nonce)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"token":"token","userinfo":{"uid":12345}}]}`))
+	}))
+	defer srv.Close()
+
+	c := newMockClient(srv)
+	if err := c.Login("test-account", "test-password"); err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if gotBody.Account != "test-account" {
+		t.Errorf("account = %q", gotBody.Account)
+	}
+	if gotBody.Password != md5Hex("test-password") {
+		t.Errorf("password hash = %q", gotBody.Password)
+	}
 }
 
 func TestGetRecentActivities_AllowsFractionalTimeSeconds(t *testing.T) {

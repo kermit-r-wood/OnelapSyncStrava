@@ -2,11 +2,11 @@ package onelap
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"time"
 
@@ -44,13 +44,23 @@ func md5Hex(s string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func randomHex(n int) string {
-	const hexChars = "0123456789abcdef"
+func randomNonce(n int) (string, error) {
+	const nonceChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = hexChars[rand.Intn(len(hexChars))]
+		var randomByte [1]byte
+		for {
+			if _, err := rand.Read(randomByte[:]); err != nil {
+				return "", fmt.Errorf("generate nonce: %w", err)
+			}
+			// Rejection sampling avoids modulo bias.
+			if int(randomByte[0]) < 256-(256%len(nonceChars)) {
+				b[i] = nonceChars[int(randomByte[0])%len(nonceChars)]
+				break
+			}
+		}
 	}
-	return string(b)
+	return string(b), nil
 }
 
 func (c *Client) Login(account, password string) error {
@@ -58,17 +68,30 @@ func (c *Client) Login(account, password string) error {
 		return fmt.Errorf("onelap account and password cannot be empty")
 	}
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	nonce := randomHex(16)
+	nonce, err := randomNonce(16)
+	if err != nil {
+		return err
+	}
 	passwordMd5 := md5Hex(password)
 
 	// Signature calculation matching Onelap's verification
 	signStr := fmt.Sprintf("account=%s&nonce=%s&password=%s&timestamp=%s&key=%s", account, nonce, passwordMd5, timestamp, OnelapSecret)
 	sign := md5Hex(signStr)
 
-	body := fmt.Sprintf(`{"account":"%s","password":"%s"}`, account, passwordMd5)
+	body := struct {
+		Account  string `json:"account"`
+		Password string `json:"password"`
+	}{
+		Account:  account,
+		Password: passwordMd5,
+	}
 
 	resp, err := c.restyClient.R().
-		SetHeader("Content-Type", "application/json").
+		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/152.0").
+		SetHeader("Accept", "application/json, text/plain, */*").
+		SetHeader("Content-Type", "application/json;charset=utf-8").
+		SetHeader("Origin", "https://www.onelap.cn").
+		SetHeader("Referer", "https://www.onelap.cn/login.html").
 		SetHeader("nonce", nonce).
 		SetHeader("timestamp", timestamp).
 		SetHeader("sign", sign).
@@ -116,7 +139,7 @@ func (c *Client) Check(account, password string) error {
 // Activity represents a single ride record from the Onelap list API.
 // POST https://u.onelap.cn/api/otm/ride_record/list
 type Activity struct {
-	ExternalID  string  `json:"id"`               // Unique activity ID
+	ExternalID  string  `json:"id"`                // Unique activity ID
 	StartTime   string  `json:"start_riding_time"` // Format: "2026-05-07 21:30:51"
 	DistanceKm  float64 `json:"distance_km"`
 	TimeSeconds float64 `json:"time_seconds"`
